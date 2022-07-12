@@ -1,0 +1,1 @@
+# PredictTestScores is a predictive analysis report on determining student post-test scores from variables including type of school(urban, suburban, rural), pre-test scores, gender, size of classroom, among others. 
