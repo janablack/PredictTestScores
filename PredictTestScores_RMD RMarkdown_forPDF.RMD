@@ -1,0 +1,1537 @@
+---
+title: "Predictive Analysis of Student Test Scores"
+author: "Janalin Black"
+date: "7/12/2021"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,fig.align = 'center',warning = FALSE, message = FALSE)
+```
+
+# 1. Introduction
+
+### 1.1 Task
+
+The purpose of this project is to train a machine learning algorithm to predict posttest scores with a given set of variables. The expectation is to use different approaches to create multiple models, each of which predicts a likely outcome. Specifically, the goal is to go beyond a simple linear regression model and explore more advanced techniques available for data prediction. 
+
+This report includes three different models, all successful at predicting reasonable posttest scores. All models include a variety of approaches including ANOVA, Chi-square, Akaika Information Criterion (AIC), Random Forest, Factor Analysis of Mixed Data (FAMD), Emsembles, regularization, and Variable Importance.
+
+### 1.2 DataSet
+
+All three models are created using the [Predict Test Scores of Students dataset](https://www.kaggle.com/kwadwoofosu/predict-test-scores-of-students) found at [Kaggle.com](https://www.kaggle.com/). This dataset is also loaded into [GitHub](https://github.com/) at [Predict Test Scores Dataset](https://github.com/janablack/PredictTestScores). The original dataset is split three ways: "scores" dataset is used for training, "scores_testing", which includes 20% of "scores" dataset, is used to test potential models, and "validation", which includes 20% of the remaining "scores" dataset, is used only to determine the accuracy of final predictions. 
+
+```{r, include=FALSE}
+# Install libraries if needed for this project
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(readr)) install.packages("readr")
+if(!require(dplyr)) install.packages("dplyr")
+if(!require(tidyr)) install.packages("tidyr")
+if(!require(stringr)) install.packages("stringr")
+if(!require(ggplot2)) install.packages("ggplot2")
+if(!require(gridExtra)) install.packages("gridExtra")
+if(!require(dslabs)) install.packages("dslabs")
+if(!require(data.table)) install.packages("data.table")
+if(!require(ggrepel)) install.packages("ggrepel")
+if(!require(ggthemes)) install.packages("ggthemes")
+if(!require(AICcmodavg)) install.packages("AICcmodavg")
+if(!require(FactoMineR)) install.packages("FactoMineR")
+if(!require(factoextra)) install.packages("factoextra")
+if(!require(h2o)) install.packages("h2o")
+if(!require(Hmisc))install.packages("Hmisc")
+if(!require(Metrics))install.packages("Metrics")
+if(!require(ranger))install.packages("ranger")
+if(!require(RColorBrewer))install.packages("RColorBrewer")
+if(!require(kableExtra))install.packages("kableExtra", dependencies = TRUE)
+if(!require(ggridges))install.packages("ggridges")
+if(!require(randomForest))install.packages("randomForest")
+if(!require(kernlab))install.packages("kernlab")
+#for pdf document
+#tinytex::install_tinytex()
+#install.packages('tinytex') 
+
+library(tidyverse)
+library(caret)
+library(data.table)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+library(gridExtra)
+library(dslabs)
+library(ggrepel)
+library(ggthemes)
+library('scales')
+library(readxl)
+library(kableExtra)
+library(knitr)
+library(AICcmodavg)
+library(broom)
+library("FactoMineR")
+library("factoextra")
+library(ggridges)
+library(h2o) 
+library(Hmisc)
+library(Metrics)
+library(RColorBrewer)
+library(randomForest)
+library(ranger)
+library(reshape2)
+library(ggridges)
+
+#load dataset
+dl <- tempfile()
+download.file("https://raw.githubusercontent.com/janablack/PredictTestScores/main/test_scores%20(1).csv", dl)
+testscore <- read.csv(dl, stringsAsFactors=TRUE )
+file.remove(dl)
+
+```
+# 2. Methods and Analysis
+
+### 2.1 Data Cleaning
+A review of the original dataset shows a `r class(testscore)` with `r ncol(testscore)` columns and `r nrow(testscore)` observations and no missing values. The `r ncol (testscore)` variables include 8 factors and 3 numerical classifications. Since the variable student_id is a randomly assigned value, it shouldn't be considered for analysis and is changed to a character classification. 
+
+#### Original data prior to cleaning
+
+```{r, echo=FALSE}
+head(testscore)
+```
+```{r, echo=FALSE}
+#Change factor to character for student_id
+testscore$student_id <- as.character(testscore$student_id)    
+
+#Create validation set from testscore dataset for final prediction
+set.seed(2021,sample.kind="Rounding")
+test_index <- createDataPartition(y = testscore$posttest, times = 1, p = 0.2, list = FALSE)
+scores <- testscore[-test_index,]
+temp <- testscore[test_index,]
+
+# Make sure 'school' in validation set is also in scores set
+validation <- temp %>% 
+  semi_join(scores, by = "school")
+
+# Add rows removed from validation set back into scores set
+removed <- anti_join(temp, validation)
+scores <- rbind(scores, removed)
+
+#Partition scores_test from scores dataset
+set.seed(2021,sample.kind="Rounding")
+test_index_test <- createDataPartition(y = scores$posttest, times = 1, p = 0.2, list = FALSE)
+scores_train <- scores[-test_index_test,]
+temp_1 <- scores[test_index_test,]
+
+# Make sure 'school' in scores_test is also in scores_train
+scores_test <- temp_1 %>% 
+  semi_join(scores_train, by = "school")
+
+# Add rows removed from scores_test back into scores_train set
+removed_1 <- anti_join(temp_1, scores_test)
+scores_train <- rbind(scores_train, removed_1)
+
+#delete unnecessary objects
+rm(dl, test_index, temp, removed, test_index_test, temp_1, removed_1)
+
+#Rename "scores_train" to "scores" for simplicity
+scores <- scores_train
+
+```
+
+
+#### Wrangled training dataset
+
+
+This is the updated scores dataset used for training the model.
+
+```{r, echo=FALSE}
+#This is to make "scores" dataset look pretty
+scores_pretty <- head(scores) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"),
+                latex_options="scale_down",
+                position = "left",
+                font_size = 8)
+scores_pretty
+
+#change number of digits
+options(digits = 3) 
+
+#mu of scores posttest
+post_mu <- mean(scores$posttest)
+post_med <- median(scores$posttest)
+
+#range of posttest scores
+min_post <- min(range(scores$posttest))
+max_post <- max(range(scores$posttest))
+```
+
+
+### 2.2 Data Exploration and Visualization
+
+A review of the training set (scores dataset) shows posttest scores with a mean of `r round(post_mu,1)`, a median of `r post_med`, and a range between `r min_post` and `r max_post`. Additionally, the following histogram seems to show a normal distribution of the dependent variable, posttest scores.
+
+```{r}
+#This plot appears to show normal distribution for posttest scores
+post_histo <- scores %>% 
+  ggplot(aes(posttest)) +
+  geom_histogram(binwidth = 5, color = "black",
+                 fill = "darkorange1") +
+  theme(plot.title = element_text(color = "#000066", hjust = .5),
+        axis.title.x = element_text(color = "#000066"),
+        axis.title.y = element_text(color = "#000066"),
+        legend.position = "none") +
+    labs(
+    x = "Score",
+    y = "Count",
+    title = paste(
+      "Post Test Scores"
+    ) 
+  )
+post_histo
+
+```
+\newpage
+Further exploration of posttest numbers reveals a qqplot that also appears to show a normal distribution of scores.
+```{r}
+#QQ-plot shows a normal distribution for posttest
+post_qq <- scores %>%
+  ggplot(aes(sample = scale(posttest))) +
+  geom_qq() +
+  geom_abline() +
+  theme(plot.title = element_text(color = "#000066", hjust = .5),
+        legend.position = "none") +
+  labs(x = "",
+       y = "",
+    title = paste(
+      "QQ Plot for Post Test Scores"
+    ) )
+post_qq
+
+#mean score for scores pretest
+pre_mu <- mean(scores$pretest)
+
+#Multiple r-squared indicates a large portion of variance in posttest
+#scores are explained by pretest scores. P-value is significant
+pp_lm <- lm(posttest ~ pretest, data=scores)
+
+#get just the r squared value
+pp_lm_rsq <- summary(pp_lm)$r.squared
+#as a percent
+pp_lm_rsq_percent <- pp_lm_rsq*100
+
+#Pearson's correlation test for pre/posttests
+pre_cor <- cor.test(scores$pretest, scores$posttest,
+         method = "pearson",
+         exact = FALSE,
+         conf.level = 0.95)
+#correlation percentage calculated
+pre_cor_percent <- pre_cor$estimate*100
+
+#Top 50 students on pretest and posttest
+top_pre <- scores %>% 
+  select(student_id, pretest) %>% arrange(desc(pretest)) %>%
+  top_n(50, pretest)
+
+top_post <- scores %>% 
+  select(student_id, posttest) %>% arrange(desc(posttest)) %>%
+  top_n(50, posttest)
+
+#common students in top 50
+top_common <- top_pre %>% inner_join(top_post, by = 'student_id')
+top_count <- count(top_common)
+
+#Bottom 50 students on pretest and posttest
+bottom_pre <- scores %>% 
+  select(student_id, pretest) %>% arrange(pretest) %>%
+  head(50)
+
+bottom_post <- scores %>% 
+  select(student_id, posttest) %>% arrange(posttest) %>%
+  head(50)
+
+#common students in bottom 50
+bottom_common <- inner_join(bottom_pre,bottom_post)
+bottom_count <- count(bottom_common)
+
+```
+\newpage
+#### 2.2a Pretest Scores 
+
+
+Evaluation of pretest scores reveal a high linear relationship with posttest scores. Although the mean score of `r round(pre_mu,1)` for the pretest is significantly lower than the mean score of the posttest at `r round(post_mu,1)`, a linear regression model indicates a large portion of the variance in posttest scores are explained by pretest scores with an R-squared value of `r round(pp_lm_rsq,2)`; `r round(pp_lm_rsq_percent,0)`% of the variability can be explained with pretest scores. Additionally, Pearson's correlation indicates a positive relationship of `r round(pre_cor_percent,0)`% and a significant P-value with an alpha level below .05%.
+Further discovery indicates individual students score similarly on the pretest and the posttest. `r top_count` pupils who scored in the top 50 for the posttest also scored in the top 50 for the pretest and `r bottom_count` students who scored in the bottom 50 for the posttest also scored in the bottom 50 for the pretest.
+
+```{r, echo=FALSE}
+#Plot of pre/posttest with lm regression line further indicates linear regression
+pp_regression <- scores %>% 
+  ggplot(aes(scale(pretest), scale(posttest))) + 
+  geom_point(alpha = 0.5, color = 'darkorange2') +
+  geom_smooth(method = "lm")+
+  theme(axis.text.x= element_text(angle = 0),
+        plot.title = element_text(color = "#000066", hjust = .5),
+        axis.title.x = element_text(color = "#000066"),
+        axis.title.y = element_text(color = "#000066"),
+        legend.position = "none") +
+  labs(
+    x = "Scaled Post Test",
+    y = "Scaled Pretest",
+    title = paste(
+      "Linear Relationship of Scores"
+    ) 
+  )
+pp_regression
+
+```
+\newpage
+A density plot comparing pretest and posttest scores indicate similar distributions of variables, overlap of pre and posttest scores, and higher scores for the posttest. 
+
+```{r, echo=FALSE}
+#combine columns for pre/posttest scores for ease in creating plots
+pre_post <- melt(scores,id.vars='student_id',
+                 measure.vars=c('pretest','posttest'))
+levels(pre_post$variable) <- c("Pretest","Post Test")
+
+#pre/posttest density plot
+pp_density <- pre_post %>% 
+  ggplot() +
+  geom_density(aes(x=value,fill=variable,alpha = .7)) +
+  guides(alpha = FALSE)+
+  theme(axis.text.x= element_text(angle = 0),
+        plot.title = element_text(color = "#000066", hjust = .5),
+        axis.title.x = element_text(color = "#000066"),
+        axis.title.y = element_text(color = "#000066"),
+        legend.title = element_blank(),
+        legend.position = "right") +
+  scale_fill_brewer(palette = 'Set2') +
+  labs(
+    x = "Score",
+    y = "Density",
+    title = paste(
+      "Pre and Post Test Densities"
+    ))
+pp_density
+
+#There are 23 schools represented
+n_schools <- nrow(as.data.frame(table(scores$school)))
+
+#Mean posttest scores of schools
+mu_school <- scores %>% 
+  select(school, posttest) %>%
+  group_by(school) %>%
+  summarise(school_avg = mean(posttest))
+
+#min and max school averages on posttest
+min_school <- round(min(mu_school$school_avg))
+max_school <- round(max(mu_school$school_avg))
+
+#Top 5 school scores for pre and posttest.
+top_pre_school <- scores %>% 
+  select(school, pretest) %>%
+  group_by(school) %>%
+  summarise(school_avg = mean(pretest)) %>%
+  arrange(desc(school_avg)) %>%
+  top_n(5, school_avg)
+
+top_post_school <- scores %>% 
+  select(school, posttest) %>%
+  group_by(school) %>%
+  summarise(school_avg = mean(posttest)) %>%
+  arrange(desc(school_avg)) %>%
+  top_n(5, school_avg)
+
+top_common_school <- top_pre_school %>% inner_join(top_post_school, by = 'school')
+
+n_top_school <- count(top_common_school)
+
+```
+\newpage
+
+#### 2.2b Schools
+
+Observations in the original dataset include `r n_schools` different schools with posttest school mean scores ranging from `r min_school` to `r max_school`. Schools appear to score similarly on the pretest and the posttest as `r n_top_school` schools who scored in the top 5 for the posttest also scored in the top 5 for the pretest. In addition, the following plot created from a sample of the scores dataset shows some schools do better than others on both pretest and posttest scores.
+
+```{r, echo=FALSE}
+#This is a sample from scores with a combined plot of pre/post scores vs school
+set.seed(1, sample.kind="Rounding")
+scores_sample_400 <- scores %>% sample_n(400)
+pp_schools <- scores_sample_400 %>%
+  mutate(school = reorder(school, pretest, FUN = mean)) %>%
+  ggplot() +
+  geom_point(aes(x=jitter(pretest), y=school), color='darkseagreen3') +
+  geom_point(aes(x=jitter(posttest), y=school), color='darkorange1') +
+  theme(axis.text.x= element_text(),
+        plot.title = element_text(color = "#000066", hjust = .5),
+        axis.title.x = element_text(color = "#000066"),
+        axis.title.y = element_text(color = "#000066")) +
+  labs(
+    x = "Score",
+    y = "School",
+    title = paste(
+      "Pre and Post Test Scores per School"
+    ) 
+  )
+pp_schools
+
+#Check for variance using Bartlett's test on school
+bartletts <- bartlett.test(posttest ~ school, data = scores)
+bartletts_pvalue <- bartletts$p.value
+
+#Since variance is assumed to be unequal, perform Welch's ANOVA
+welchs <- oneway.test(posttest ~ school, data = scores, var.equal = FALSE)
+welchs_pvalue <- welchs$p.value
+
+#pairwise t-tests with Bonferroni's correction
+bonferroni <- pairwise.t.test(scores$posttest, scores$school,
+                              p.adjust.method="bonferroni")
+```
+
+Further exploration of schools shows there are significant differences between the means of some posttest scores. Bartlett's test of homogeneity of variances indicates there are significant differences between schools with a p-value of `r round(bartletts_pvalue,1)`; Welch's one-way analysis of means also shows a p-value of `r round(welchs_pvalue,1)`.  Bonferroni's correction of pairwise comparisons using t tests indicate some school mean scores are significant and others are not.
+
+```{r, echo=FALSE}
+#Classroom has 97 different occurrences.
+n_class <- as.data.frame(table(scores$classroom))
+class_numbers <- nrow(n_class)
+
+#This table shows mean and median scores per classroom
+mu_class <- scores %>%
+  group_by(classroom) %>%
+  summarise(avg=mean(posttest), median = median(posttest))
+class_max <- max(mu_class$avg)
+class_min <- min(mu_class$avg)
+```
+\newpage
+#### 2.2c Classroom
+
+Another potential predictor is different classrooms. The original dataset has observations from `r class_numbers` classroom classifications with mean posttest scores ranging between `r class_min` and `r class_max`.
+
+The following plot shows differences between scores based on the classroom, with some classrooms scoring significantly higher than others. 
+
+```{r, echo=FALSE}
+#This plot shows that the type of classroom impacts pretest and posttest scores. 
+class_plot <- scores %>%
+  mutate(classroom = reorder(classroom, posttest, FUN = mean)) %>%
+  ggplot(aes(posttest,pretest, col = classroom)) +
+  geom_point(size = .1) +
+  theme(axis.text.x= element_text(),
+        plot.title = element_text(color = "#000066", hjust = .5),
+        plot.subtitle = element_text(color = "#CC6633", hjust = .5),
+        axis.title.x = element_text(color = "#000066"),
+        axis.title.y = element_text(color = "#000066"),
+        legend.position = "none") +
+  labs(
+    x = "Posttest",
+    y = "Pretest",
+    title = paste(
+      "Individual Scores by Classroom"),
+      subtitle=paste(
+        "(colored by classroom)"
+    ) 
+  )
+class_plot
+
+```
+\newpage
+A diverging plot with normalized classroom posttest scores also shows there are differences in scores based on the classroom. 
+
+```{r}
+#mean of posttest
+mu <- mean(scores$posttest)
+
+# Compute normalized posttest and scale above/below
+round_posttest <- scores %>%
+  group_by(classroom) %>%
+  summarise(avg=mean(posttest),
+            normalized_posttest = avg-mu,
+            posttest_type = ifelse(normalized_posttest < 0, "below", "above"))
+
+#Plot of diverging classroom scores
+class_diverging <- round_posttest %>%
+  ggplot(aes(x=reorder(classroom,normalized_posttest), y= normalized_posttest)) +
+  geom_bar(stat='identity', aes(fill= posttest_type), width=.5)  +
+  scale_fill_manual(name="Mean Score", 
+                    labels = c("Above Average", "Below Average"), 
+                    values = c("above"="darkorange1", "below"="darkseagreen4")) +
+  theme_minimal() +
+  theme(axis.text.y = element_blank(),
+        axis.text.x= element_text(),
+        plot.title = element_text(color = "#000066", hjust = .5),
+        axis.title.x = element_text(color = "#000066"),
+        axis.title.y = element_text(color = "#000066")) +
+  labs(title= paste("Classroom Posttest Mean Scores"),
+       x = "Classroom",
+       y = "Normalized Score") +
+  coord_flip()
+class_diverging 
+
+#This table shows 3 types of school settings with numbers of students and percentage.
+ss_table <- scores %>%
+  count(school_setting) %>%
+  mutate(percentage =100*(n/sum(n)))
+
+#percentage by school setting
+rural_total <- round(ss_table$percentage[1])
+suburban_total <- round(ss_table$percentage[2])
+urban_total <- round(ss_table$percentage[3])
+
+
+#Bartlett's test on school_setting.
+bartlett_ss <- bartlett.test(posttest ~ school_setting,
+                             data = scores)
+bartlett_pvalue_ss <- bartlett_ss$p.value
+
+#Welch's ANOVA on school_setting
+welch_ss <- oneway.test(posttest ~ school_setting, 
+                        data = scores, var.equal = FALSE)
+welch_pvalue_ss <- welch_ss$p.value
+
+#Bonferroni's correction to find which groups variance is significant.
+bonferroni_ss <- pairwise.t.test(scores$posttest, scores$school_setting,
+                                 p.adjust.method="bonferroni")
+bon_pvalue <- bonferroni_ss$p.value[2,1]
+
+```
+\newpage
+#### 2.2d School Setting
+
+The variable school setting has three levels, with rural schools representing `r rural_total`%, suburban schools at `r suburban_total`%, and urban schools with `r urban_total`%. Further exploration shows there are differences between the means of posttest scores for all three groups. Bartlett's test of homogeneity of variances indicates there are significant difference between school settings with a p-value of `r round(bartlett_pvalue_ss,1)` and Welch's one-way analysis of means also shows a p-value of `r round(welch_pvalue_ss,1)`.  Bonferroni's correction of pairwise comparisons using t tests indicate significant differences between all three groups with the highest p-value at `r bon_pvalue` when comparing rural to urban schools.
+
+This plot shows differences in posttest and pretest scores versus school setting. Many suburban schools score higher than urban schools with only a few suburban schools schools with low scores. 
+
+```{r}
+#plot of post/pretest scores vs school setting
+ss_pp_plot <- scores %>% ggplot() +
+  geom_point(aes(posttest,pretest,col=school_setting))
+ss_pp_plot
+```
+\newpage
+This second image shows that suburban schools score higher on posttest scores than both rural and urban schools. Additionally, mean scores for rural and urban schools are similar, which agrees with Bonferroni's results. 
+```{r}
+
+#This table shows similar results for mean and median posttest scores vs. school_setting 
+mu_ss <- scores %>%
+  group_by(school_setting) %>%
+  summarise(avg=mean(posttest), median = median(posttest))
+
+#Density plot of school_setting with mean posttest scores
+density_ss <- scores %>% 
+  ggplot(aes(x = posttest, y = school_setting, fill = school_setting)) + 
+  geom_density_ridges(scale = .8,
+                      alpha = .7,
+                      show.legend = FALSE)+
+  geom_vline(data = mu_ss, aes(xintercept = avg, 
+                                       color = school_setting), size=1.5)+
+  theme(axis.text.x= element_text(angle = 0),
+        plot.title = element_text(color = "#000066", hjust = .5),
+        axis.title.x = element_text(color = "#000066"),
+        axis.title.y = element_text(color = "#000066"),
+        legend.title = element_blank(),
+        legend.position = "right") +
+  labs(
+    x = "Post Test Score",
+    y = "",
+    title = paste(
+      "Density Plots with Mean Scores"
+    )) 
+density_ss
+
+#This table shows that there are nearly three times as many public as non-public schools
+school_type_numbers <- scores %>%
+  count(school_type) %>%
+  mutate(proportion = 100*(n/sum(n)))
+
+#percentages of each
+n_non_public <- round(school_type_numbers$proportion[1])
+n_public <- round(school_type_numbers$proportion[2])
+```
+\newpage
+#### 2.2e School Type
+
+Categories in school type include non-public schools with `r n_non_public`% and public schools with `r n_public`% of observations. There appears to be differences between school type with non-public schools outperforming public schools.
+
+```{r, echo=FALSE, message=FALSE}
+#plot of school_type vs pre/posttest scores
+st_plot <- scores %>%
+  ggplot() +
+  geom_point(aes(posttest,pretest,col=school_type))+
+  theme(axis.text.x= element_text(angle = 0),
+        plot.title = element_text(color = "#000066", hjust = .5),
+        axis.title.x = element_text(color = "#000066"),
+        axis.title.y = element_text(color = "#000066"),
+        legend.title = element_blank(),
+        legend.position = "right") +
+  #scale_fill_brewer(palette = 'Set2') +
+  labs(
+    x = "Post Test",
+    y = "Pretest",
+    title = paste(
+      "Scores by School Type"
+    ))
+st_plot
+
+#This table shows that gender is nearly equally split
+n_gender <- scores %>% 
+  group_by(gender) %>% 
+  dplyr::summarize(percent = 100 * n() / nrow(scores),
+                   count = n())
+
+#percent gender for female and male
+n_female <- n_gender[1,2]
+n_male <- n_gender[2,2]
+
+```
+\newpage
+#### 2.2f Gender
+
+The gender variable indicates that sexes are nearly equally split with `r round(n_female,1)`% female and `r round(n_male,1)`% male. The initial evaluation of gender as a predictor is not promising as the following plot shows nearly identical boxplots on posttest scores for both genders.
+
+```{r, echo=FALSE}
+#This boxplot indicates that posttest scores are nearly the same for both genders
+gender_box <- scores %>% 
+  ggplot() +
+  geom_boxplot(aes(x=gender, y=posttest,fill=gender)) +
+  theme(axis.text.x= element_text(angle = 0),
+        plot.title = element_text(color = "#000066", hjust = .5),
+        axis.title.x = element_text(color = "#000066"),
+        axis.title.y = element_text(color = "#000066"),
+        legend.position = "none") +
+  scale_fill_brewer(palette = 'Set2') +
+  labs(
+    x = "",
+    y = "Score",
+    title = paste(
+      "Gender and Post Test Scores"
+    ) 
+  )
+gender_box
+
+#min and max numbers of students in class
+n_room_min <- min(scores$n_student)
+n_room_max <- max(scores$n_student)
+
+#mean number of students in class
+room_mu <- round(mean(scores$n_student))
+
+
+#Correlation between number of students in class and posttest scores.
+room_cor <- cor(scores$n_student,scores$posttest)
+
+```
+\newpage
+#### 2.2g Number of Students in the Classroom
+
+The number of students per classroom ranges between `r n_room_min` and `r n_room_max` with the average number at `r room_mu`. Correlation between the number of students in a classroom and posttest scores is negative at `r round(room_cor,2)`, which indicates classrooms with higher numbers of students have lower scores. 
+
+The following plot visualizes the negative relationship between classroom numbers and test scores. As the number of students in a classroom increases, posttest scores decrease. 
+
+```{r, echo=FALSE}
+#The number of students in a class seems to effect posttest scores.
+#As the number of students in class increases, scores decrease.
+class_n_post_plot <- scores %>%
+  group_by(n_student) %>%
+  summarise(n = n(),
+            avg = mean(posttest),
+            se = sd(posttest)/sqrt(length(posttest))) %>%
+  ggplot(aes(n_student, avg, ymin = avg - 2*se, ymax = avg + 2*se)) +
+  geom_point(color = "#CC6633") +
+  geom_errorbar(color = "#CC6633")+
+  theme(axis.text.x= element_text(hjust = 1),
+        plot.title = element_text(color = "#000066", hjust = .5),
+        axis.title.x = element_text(color = "#000066"),
+        axis.title.y = element_text(color = "#000066")) +
+  labs(
+    x = "Students Per Class",
+    y = "Average Post Test Score",
+    title = paste(
+      "Number of Students in Class and Scores"
+    ) 
+  )
+class_n_post_plot
+
+#Percent who qualify for lunch
+lunch_percent <- scores %>% 
+  group_by(lunch) %>% 
+  dplyr::summarize( percent = 100 * n() / nrow(scores))
+
+#Percent for both groups
+not_qualify_lunch <- lunch_percent$percent[1]
+qualify_lunch <- lunch_percent$percent[2]
+```
+\newpage
+#### 2.2h Free and Reduced Lunch
+
+Another potential variable is whether or not a student qualifies for free or reduced lunch. From the dataset, `r round(qualify_lunch,0)`% of all students qualify for free or reduced lunch and the other `r round(not_qualify_lunch,0)`% do not. 
+
+This plot created from a sample of the scores dataset indicates there may be a relationship between student lunch benefits and test scores. Ellipses show differences between test scores for students who do and don't qualify for free and reduced lunch.
+
+```{r, echo=FALSE}
+
+#create a sample from scores dataset
+set.seed(1, sample.kind="Rounding")
+scores_sample <- scores %>% sample_n(200)
+
+#plot of lunch benefits vs pre and posttest scores
+lunch_sample <- scores_sample %>%ggplot(aes(posttest, pretest, fill = lunch, color=lunch)) + 
+  geom_point(show.legend = FALSE) + 
+  stat_ellipse(type="norm", lwd = 1)+
+  theme(plot.title = element_text(color = "#000066", hjust = .5),
+        axis.title.x = element_text(color = "#000066"),
+        axis.title.y = element_text(color = "#000066"),
+        legend.title = element_blank(),
+        legend.position = "bottom") +
+  labs(
+    x = "Post Test",
+    y = "Pretest",
+    title = paste(
+      "Lunch Benefits and Scores"
+    ) 
+  ) 
+lunch_sample
+
+#teaching_method totals
+teaching_method_numbers <- scores %>%
+  count(teaching_method) %>%
+  mutate(percent = 100*(n/sum(n)))
+
+#percents for teaching method totals
+tm_experiment <- teaching_method_numbers$percent[1]
+tm_standard <- teaching_method_numbers$percent[2]
+
+#Mean and median scores for teaching method
+mu_tm <- scores %>%
+  group_by(teaching_method) %>%
+  summarise(avg=mean(posttest), median = median(posttest))
+
+#percents for posttest mean of teaching method
+experimental_avg <- mu_tm$avg[1]
+standard_avg <- mu_tm$avg[2]
+```
+\newpage
+#### 2.2i Teaching Method
+
+This last variable is the teaching method utilized, experimental or standard. In the dataset, there are `r round(tm_experiment,0)`% experimental and `r round(tm_standard,0)`% standard teaching method groups. Looking further, the posttest mean score for the experimental group is `r experimental_avg` and `r round(standard_avg,2)` for the standard method group.
+
+Showing these numbers visually reveals differences between experimental and standard posttest densities and mean scores, with the experimental group outperforming the standard group.
+
+```{r, echo=FALSE}
+#density plot shows posttest scores vs teaching method with added mean scores.
+density_tm <- scores %>% 
+  ggplot(aes(x = posttest,fill=teaching_method)) + 
+  geom_density(alpha = .5,
+                      show.legend = FALSE)+
+  geom_vline(data = mu_tm, aes(xintercept = avg, 
+                               color = teaching_method), size=1.5)+
+  theme(axis.text.x= element_text(angle = 0),
+        plot.title = element_text(color = "#000066", hjust = .5),
+        axis.title.x = element_text(color = "#000066"),
+        axis.title.y = element_text(color = "#000066"),
+        legend.title = element_blank(),
+        legend.position = "right") +
+    labs(
+    x = "Score",
+    y = "",
+    title = paste(
+      "Density Plot with Mean Scores"
+    )) 
+density_tm
+
+```
+
+### 2.3 Models
+
+Three models are trained using the scores training set to predict posttest scores. Final models for each of the three groups is then tested on the scores test dataset. Because testing on these models happens throughout the process of model creation, a final test for the winning model is done on the validation set, the final hold-out test set, to determine the best overall fit.
+
+#### 2.3a MODEL 1
+
+The first model is a linear approach that utilizes ANOVA and Chi-squared tests to discover variables to consider for potential models. The Akaike information criterion (AIC) is used on five iterations for variable choices to determine the best options for the final model.
+
+Because there are multiple promising independent variables to consider, variables that don't seem to have an impact on the regression model are omitted in different versions of potential models. 
+
+```{r}
+
+#First model choice using aov for AIC prediction
+choice_1 <- aov(posttest ~ pretest + school_setting + school_type +
+                 teaching_method + n_student + gender +
+                 lunch + classroom + school, data = scores)
+
+#First model choice using lm
+choice_1_lm <- lm(posttest ~ pretest + school_setting + school_type +
+              teaching_method + n_student + gender +
+              lunch + classroom + school, data = scores)
+
+choice_1_summary <- summary(choice_1_lm)
+choice1_adj_rsq <- round(100*(choice_1_summary$adj.r.squared),2)
+
+#generating p-scores for choice_1
+choice1_anova <- anova(choice_1_lm)
+gender_pscore <- choice1_anova$'Pr(>F)'[6]
+
+#Chi-squared test between 'school' and 'classroom'
+sc_chisq <- chisq.test(scores$school,scores$classroom)
+sc_p.value <- sc_chisq$p.value
+
+#The second model excludes school and gender as predictors
+choice_2 <- aov(posttest ~ pretest + school_setting + school_type + classroom +
+                 teaching_method + n_student + lunch, data = scores)
+
+#The third model removes classroom and gender
+choice_3 <- aov(posttest ~ pretest + school + school_setting + school_type +
+                 teaching_method + n_student + lunch, data = scores)
+
+#Interaction between school_setting and lunch
+interaction2 <- aov(posttest ~ school_setting*lunch, data = scores)
+
+#calls p-value for school_setting/lunch interaction
+ssl_interaction <- round(summary(interaction2)[[1]][["Pr(>F)"]][[3]],2)
+
+#The fourth model excludes lunch, school, and gender
+choice_4 <- aov(posttest ~ pretest + school_setting + school_type + classroom +
+                 teaching_method + n_student, data = scores)
+
+#interaction between school_setting and school_type
+interaction1 <- aov(posttest ~ school_setting*school_type, data = scores)
+
+#calls p-value for school_setting/school_type interaction
+ssss_interaction <- round(summary(interaction1)[[1]][["Pr(>F)"]][[3]],1)
+
+#The fifth model excludes school_setting, school, and lunch.
+choice_5 <- aov(posttest ~ pretest + school_type + classroom +
+                 teaching_method + n_student + gender, data = scores)
+
+```
+
+
+The first approach includes all variables. Since every variable, excluding gender, had promising predictive power, tossing them all in seemed a good way to start. Adjusted R-Squared indicates `r round(choice1_adj_rsq,0)`% of the variation in posttest scores are explained with this first approach. An ANOVA analysis indicates >.01 significant p-values for all variables analyzed except gender, which has an insignificant p-value of `r round(gender_pscore,0)`. 
+
+The variable school wasn't utilized in the calculation. A Chi-squared test measuring the relationship between school and classroom indicates a p-value of `r sc_p.value`, or highly significant. It may be the case that the variables school and classroom have collinearity as classrooms are within schools. 
+
+The second and third approaches to this model utilize what was learned from the first analysis: gender, school, and classroom variables either have interactions with each other or aren't significant to posttest prediction. The second approach includes all significant variables from the first approach; all variables are considered except gender and school. The third approach excludes gender but includes the variable school by excluding classroom.
+
+Variables excluded in the fourth approach are school, gender, and lunch. It was found with ANOVA-between variables that there is a significant interaction between lunch and school setting with a p-score of `r ssl_interaction`.  It's possible that there may be a difference between socio-economic status of urban, suburban, and rural schools which could create correlation with qualifications for reduced/free lunch.
+
+The fifth approach excludes variables school, lunch, and school setting. Since there is a significant interaction between school type and school setting with a p-score of `r ssss_interaction`, school setting was removed from this final model.
+
+```{r}
+#Akaike information criterion (AIC) used to test fit of 5 choice models.
+model.group <- list(choice_1, choice_2, choice_3, choice_4, choice_5)
+model.names <- c("choice_1", "choice_2", "choice_3", "choice_4", "choice_5")
+
+
+#running AIC against 5 choices
+aic <- aictab(model.group, model.names)
+
+#range of aic numbers
+range_aic_min <- round(min(range(aic$AICc)),1)
+range_aic_max <- round(max(range(aic$AICc)),1)
+
+#Call best result from AIC
+aic_highest <- aic$Cum.Wt[1]
+aic_highest_percent <- round(100*(aic$Cum.Wt[1]),1)
+
+#choice_1 is trained.
+train_choice_1 <- train(posttest ~ pretest + school_setting + school_type +
+                          teaching_method + n_student + gender +
+                          lunch + classroom + school,
+                       method = "lm", data = scores)
+
+#Predictions made using scores_test
+y_hat_choice_1 <- predict(train_choice_1, scores_test)
+
+#RMSE results using scores_test
+model_1_best <- rmse(scores_test$posttest, y_hat_choice_1)
+
+#RMSE results using validation dataset
+y_hat_model_1_val <- predict(train_choice_1, validation)
+model_1_validation <- rmse(validation$posttest, y_hat_model_1_val)
+
+```
+
+
+##### MODEL 1 RESULTS
+
+The Akaike information criterion (AIC) is used to test models for best fit. AIC determines the overall value of each model by comparing the explained variation with the number of parameters. The lowest AIC value indicates the most information explained of all models.
+
+Applying AIC to the five approaches shows AIC scores ranging from `r range_aic_min` to `r range_aic_max`, with the lowest score for the first model. This suggests the first model is the best fit and will achieve the lowest RMSE of the five options. From AIC, the first model yields an AIC weight of `r aic_highest`, which indicates that `r aic_highest_percent`% of total variation in the posttest score can be explained by this model.
+
+Testing the first approach, Model 1, show the following RMSE score for the scores test set.
+
+
+```{r}
+#Table for model 1 test set RMSE
+model_1_test <- data_frame("Model 1" = "Test Set",
+                           "RMSE Score" = model_1_best )
+#Make the table prettier
+model_1_test_table <- model_1_test %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                position = "center",
+                latex_options = "hold_position",
+                full_width = FALSE,
+                font_size = 14)
+
+model_1_test_table
+```
+```{r}
+#Classroom has 97 different occurrences.
+n_class <- as.data.frame(table(scores$classroom))
+class_numbers <- nrow(n_class)
+
+```
+
+#### 2.3b MODEL 2
+
+The second approach to creating a best-fit model is using Random Forests. The Random Forest tool is selected because it is robust when there are correlated predictors, which seems to be a problem with several of the variables in this dataset. Random Forest is also capable of finding the importance of variables and will be helpful in designing Model 3. One drawback of using Random Forest is it's limitation on groups within variables. The selected Random Forest calculator limits the number of groups to 53, while the predictor classroom has `r class_numbers`. Since the classroom variable was significant for Model 1 results, this will be a limitation for Model 2.
+
+Four models are created using Random Forest, each with a different set of predictors. After training and testing each of these models, the last model, Fit 4, produces the best RMSE score. From here, parameters for Fit 4 are trained for number of variables sampled (mtry) and node size. Results indicate that Fit 4 with added parameter adjustments produced the best fit model.
+```{r}
+#Random Forest model with just pretest as a predictor
+set.seed(200, sample.kind="Rounding")
+fit <- randomForest(posttest~pretest,
+                    data = scores)
+
+# predict model on test data
+predValues <- predict(fit,scores_test)
+
+#RMSE function in Metrics library to predict fit 1
+fit_1_rmse <- rmse(scores_test$posttest, predValues)
+
+##Random Forest model with predictors from lm best model
+set.seed(200, sample.kind="Rounding")
+fit2 <- randomForest(posttest ~ pretest + school + 
+                       gender + lunch, data = scores)
+
+# Prediction on test data
+predValues <- predict(fit2,scores_test)
+
+#RMSE on fit 2:
+fit_2_rmse <- rmse(scores_test$posttest, predValues)
+
+#Random Forest model without pretest as predictor (also w/o "classroom")
+set.seed(200, sample.kind="Rounding")
+fit3 <- randomForest(posttest~
+                       school_setting + school_type +
+                       lunch + school +
+                       teaching_method + n_student + gender,
+                     data = scores)
+
+# Prediction on test data
+predValues <- predict(fit3,scores_test)
+
+# RMSE on fit 3 test set 
+fit_3_rmse <- rmse(scores_test$posttest, predValues)
+
+##Random Forest model with all predictors except "classroom"
+set.seed(200, sample.kind="Rounding")
+fit4 <- randomForest(posttest~ pretest +
+                       school_setting + school_type +
+                       lunch + school + gender +
+                       teaching_method + n_student,
+                     data = scores)
+
+# Prediction on test data
+predValues <- predict(fit4,scores_test)
+
+#Calculate RMSE on fit 4
+model_2_best <-rmse(scores_test$posttest, predValues)
+
+#Apply new params to fit4 model
+set.seed(200, sample.kind="Rounding")
+fit4_best <- randomForest(posttest~ pretest +
+                                    school_setting + school_type +
+                                    lunch + school + gender +
+                                    teaching_method + n_student,
+                                  data = scores,
+                                  mtry = 4,
+                                  importance = TRUE,
+                                  nodesize = 20)
+
+# Prediction on test data
+predValues_best <- predict(fit4_best,scores_test)
+
+#Calculate RMSE on fit 4 best
+model_2_best_update <-rmse(scores_test$posttest, predValues_best)
+```
+
+
+A summary of each random forest model and RMSE conclusions are listed in the table below. Notice the lowest RMSE from Model 2 is `r model_2_best_update` which is good, but Model 1 still outperforms with an RMSE of `r model_1_best`. 
+
+```{r}
+#Table for random forest RMSE results
+rf_results_table <- data_frame("Random Forest Model(classroom excluded)" =
+                                 c("Fit 1 - pretest as only predictor",
+                                   "Fit 2 - best-fit predictors from Model 1",
+                                   "Fit 3 - doesn't include pretest",
+                                   "Fit 4 - all predictors",
+                                   "Fit 4 Adj. - adding best mtry/node size"),
+                               "Test Set RMSE" =
+                                 c(fit_1_rmse, fit_2_rmse,fit_3_rmse,
+                                   model_2_best, model_2_best_update))
+#Make the table prettier
+rf_results <- rf_results_table %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = 
+                  c("striped", "hover", "condensed", "responsive"),
+                position = "center",
+                latex_options = "hold_position",
+                full_width = FALSE,
+                font_size = 14)%>%
+  row_spec(5, bold = T, color = '#CC6633')
+
+rf_results
+
+```
+\newpage
+Visualizing the predictive power of Model 2 shows densities of predictions compared to actual posttest scores are quite similar. 
+
+```{r}
+#For  fit 4 best density plot comparison
+#combine columns from two dataframes for density plot comparison
+density_posttest <- data.frame(posttest = scores$posttest)
+density_predicted <- as.data.frame(fit4_best$predicted)
+density_posttest$observation <- 1:nrow(density_posttest) 
+density_predicted$observation <- 1:nrow(density_predicted) 
+density_combined <- merge(density_posttest,density_predicted, by = "observation")
+density_pp <- melt(density_combined,id.vars='observation',
+                   measure.vars=c('posttest','fit4_best$predicted'))
+levels(density_pp$variable) <- c("Actual","Predicted")
+
+#Density plot comparing scores posttest scores to fit4_best(best model)
+rf_plot <- density_pp %>%
+  ggplot() +
+  geom_density(aes(x=value,fill=variable,alpha = .7)) +
+  guides(alpha = FALSE)+
+  theme(axis.text.x= element_text(angle = 0),
+        plot.title = element_text(color = "#000066", hjust = .5),
+        plot.caption = element_text(color = "#CC6633", hjust = .5),
+        axis.title.x = element_text(color = "#000066"),
+        axis.title.y = element_text(color = "#000066"),
+        legend.title = element_blank(),
+        legend.position = "right") +
+  scale_fill_brewer(palette = 'Set2') +
+  labs(
+    x = "Posttest Score",
+    y = "Density",
+    title = paste(
+      "Random Forest Final Model"),
+    caption = paste(
+      "(Data source: scores_test)")
+    )
+rf_plot
+```
+\newpage
+A final analysis done on Model 2, the Random Forest model, is to evaluate the variable importance for predictors included in the winning model. These values will be helpful in constructing the final model, Model 3. 
+
+The table below shows the variable importance for the best model using Random Forest. Teaching method is listed as having the most importance and gender the least. 
+
+```{r}
+#Variable Importance calculated on fit4_best, the best model 
+varimp_fit4_best <- varImp(fit4_best)
+
+#Arrange variable imp desc.
+varimp <- varimp_fit4_best  %>% arrange(desc(Overall))
+
+#Make varimp table pretty
+varimp_results <- varimp %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped","condensed"),
+                #position = "center",
+                latex_options = "hold_position",
+                full_width = FALSE,
+                font_size = 14)
+
+varimp_results
+
+```
+
+
+#### 2.3c MODEL 3
+
+This final model utilizes information learned about the variables from Model 1 and Model 2 to construct a learning algorithm. 
+
+The first step used for this model is including the generalized linear model (glm) for the variable pretest. From Model 1, it was assessed that pretest had a strong linear relationship with the dependent variable, posttest. Additionally, constructing an ensemble of potential methods for predicting scores from a numeric variable indicated that the glm approach was best. 
+
+Results in the table below indicate that "glm" is the best model for predicting posttest scores from the pretest.
+
+```{r}
+#Ensemble used to find best method for pretest portion of model
+models <- c("lm", "glm", "rlm", "knn", "rf", "svmLinear")
+
+set.seed(1, sample.kind = "Rounding")
+fits <- lapply(models, function(model){ 
+  train(posttest ~ pretest, method = model, data = scores)
+}) 
+names(fits) <- models
+
+#Table with results of ensemble shows "glm" as the best model for pretest
+
+#limit digits for table simplicity
+options(digits = 3)
+
+train_rmse_table <- data_frame(Model = c("lm", "glm",
+                                                     "rlm", "knn", 
+                                                     "rf", "svmLinear"),
+                               RMSE = c(fits$lm$results$RMSE,
+                                        fits$glm$results$RMSE,
+                                        fits$rlm$results$RMSE[1],
+                                        fits$knn$results$RMSE[2],
+                                        fits$rf$results$RMSE,
+                                        fits$svmLinear$results$RMSE))
+#Make the table prettier
+ensemble_table <- train_rmse_table %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"),
+                #position = "center",
+                full_width = FALSE,
+                latex_options = "hold_position",
+                font_size = 14)%>%
+  row_spec(2, bold = T, color = '#CC6633')
+
+ensemble_table
+```
+Adding the pretest variable to the average of posttest scores yields improvement over just the average of all scores when applying it to the test dataset. However, this RMSE result is still higher than what was found in both previous models.
+
+```{r}
+#Finding just the average using RMSE
+mu <- mean(scores$posttest) 
+basic_rmse <- RMSE(scores_test$posttest, mu)
+rmse_results <- data_frame("Model 3" = "Posttest Average", RMSE = basic_rmse)
+
+#Adding pretest as predictor using glm
+pretest_glm <- train(posttest ~ pretest, method = "glm", data = scores)
+
+#Adding glm equation results from training set into scores, scores_test, and validation datasets
+sum_glm <- summary(pretest_glm)
+
+#Adding prediction glm from training set to train, test, and validation datasets
+scores_train <- scores %>%
+  mutate(predicted_glm = sum_glm$coefficients[2,1]*pretest
+         + sum_glm$coefficients[1,1], bp=posttest-predicted_glm)
+
+scores_test <- scores_test %>%
+  mutate(predicted_glm = sum_glm$coefficients[2,1]*pretest
+         + sum_glm$coefficients[1,1], bp=posttest-predicted_glm)
+
+scores_validation <- validation %>%
+  mutate(predicted_glm = sum_glm$coefficients[2,1]*pretest
+         + sum_glm$coefficients[1,1], bp=posttest-predicted_glm)
+
+#Pretest effect RMSE results
+bp_rmse <- RMSE(scores_test$predicted_glm, scores_test$posttest)
+
+#RMSE results table adding pretest(glm) effect
+pretest_rmse <- bind_rows(rmse_results,
+                          data_frame("Model 3" = "Pretest glm Model",
+                                     RMSE = bp_rmse ))
+
+#Make the table prettier
+pretest_table <- pretest_rmse %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"),
+                #position = "center",
+                latex_options = "hold_position",
+                full_width = FALSE,
+                font_size = 14)
+
+pretest_table
+
+```
+
+Because the Random Forest model, Model 2, doesn't include the predictor "classroom" in the analysis, the variable importance of results may be missing valuable information from this variable. Because of this, Factor Analysis of Mixed Data (FAMD) is used to further analyze potential contributions to the scores dataset, which has both quantitative and qualitative predictors.
+
+From FAMD results, the two tables below indicate classroom is the highest contributor for both dimensions 1 and 2. From these results, the classroom predictor will be added next to our model using typical error loss. Residual Mean Squared Error (RMSE) will be used on the predictions using the scores test set. 
+
+```{r}
+#Prepare data for FAMD
+train_famd <- subset(scores, select = c(-student_id))
+test_famd <- subset(scores_test, select = c(-student_id))
+
+#FAMD analysis
+res.famd <- FAMD(train_famd, graph = FALSE)
+
+# Contribution to the first dimension
+cont_1 <- fviz_contrib(res.famd, "var", axes = 1)
+# Contribution to the second dimension
+cont_2 <- fviz_contrib(res.famd, "var", axes = 2)
+
+#Arrange contributions side by side
+grid.arrange(cont_1,cont_2, ncol = 2)
+
+```
+
+The table below shows a lower RMSE score with classroom added as a predictor. Additionally, from FAMD, some classrooms are used as predictors and others are not. Regularization is applied to classroom to account for some classrooms with limited posttest scores. This results in a slightly lower RMSE number.
+
+```{r}
+#This calculates the classroom effect(bc) using Least Squares approximation.
+class_bc <- scores_train %>% 
+  group_by(classroom) %>%
+  summarise(bc = mean(posttest - mu - bp))
+
+#RMSE results with "classroom" effect
+bc_score <- scores_test %>%
+  left_join(class_bc, by = 'classroom') %>%
+  mutate(class_pred = mu + bp + bc) %>%
+  pull(class_pred)
+bc_rmse <- RMSE(bc_score, scores_test$posttest)
+
+#RMSE results table including adding "classroom" effect
+class_rmse <- bind_rows(pretest_rmse,
+                        data_frame("Model 3"="Classroom Effect",
+                                   RMSE = bc_rmse))
+
+#This lambda was selected based on exploration of different lambda numbers
+lambda <- seq(-.5, .5, 0.025)
+
+class_bc_r <- sapply(lambda, function(x){
+  mu <- 
+    mean(scores_train$posttest)
+  c_bc <-
+    scores_train %>% 
+    group_by(classroom) %>% 
+    summarise(c_bc = sum(posttest - mu - bp)/(n()+x))
+predicted <-
+    scores_test %>% 
+    left_join(c_bc, by='classroom') %>%
+    mutate(class_pred = mu + bp + c_bc)%>%
+    pull(class_pred)
+  
+  return(RMSE(predicted, scores_test$posttest))
+})
+
+#Optimal penalty (lambda) for classroom predictor
+class_lambda <- lambda[which.min(class_bc_r)]
+
+#Classroom model for adding more predictions
+class_bc_add <-
+  scores_train %>% 
+  group_by(classroom) %>% 
+  summarise(bc = sum(posttest - mu - bp)/(n()+ class_lambda))
+
+#Best RMSE 
+bc_reg_rmse <- min(class_bc_r)
+
+#RMSE results table adding Regularized "classroom" effect shows improved RMSE results
+reg_class_rmse <- bind_rows(class_rmse,
+                            data_frame("Model 3"="Regularized Classroom Effect",
+                                       RMSE = bc_reg_rmse ))
+
+options(digits = 5)
+#Make the table prettier
+class_table <- reg_class_rmse %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"),
+                #position = "center",
+                latex_options = "hold_position",
+                full_width = FALSE,
+                font_size = 14)
+class_table
+```
+\newpage
+From here, the remaining predictors are added to our error loss model ordered according to Variable Importance from the Random Forest model. Results using this approach indicate improved RMSE scores overall. However, some variables increase RMSE scores.
+
+```{r}
+#This calculates the teaching method(bm).
+method_bm <- scores_train %>% 
+  left_join(class_bc_add, by ='classroom')%>%
+  group_by(teaching_method) %>%
+  summarise(bm = mean(posttest - mu - bp - bc))
+
+#RMSE results with "teaching method" effect
+bm_score <- scores_test %>%
+  left_join(class_bc_add, by ='classroom') %>%
+  left_join(method_bm, by ='teaching_method')%>%
+  mutate(method_pred = mu + bp + bc + bm) %>%
+  pull(method_pred)
+bm_rmse <- RMSE(bm_score, scores_test$posttest)
+
+method_rmse <- bind_rows(reg_class_rmse,
+                           data_frame("Model 3"="Teaching Method Effect",
+                                      RMSE = bm_rmse))
+#Make the table prettier
+method_table <- method_rmse %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"),
+                #position = "center",
+                latex_options = "hold_position",
+                full_width = FALSE,
+                font_size = 14)
+
+#This calculates the school effect(bs) using Least Squares approximation.
+school_bs <- scores_train %>% 
+  left_join(class_bc_add, by = 'classroom') %>%
+  left_join(method_bm, by = 'teaching_method') %>%
+  group_by(school) %>%
+  summarise(bs = mean(posttest - mu - bp - bc - bm))
+
+#RMSE results with "school" effect
+bs_score <- scores_test %>%
+  left_join(class_bc_add, by = 'classroom') %>%
+  left_join(method_bm, by = 'teaching_method') %>%
+  left_join(school_bs, by = 'school') %>%
+  mutate(school_pred = mu + bp + bc + bm + bs) %>%
+  pull(school_pred)
+bs_rmse <- RMSE(bs_score, scores_test$posttest)
+
+#RMSE results table including adding "lunch" effect
+school_rmse <- bind_rows(method_rmse,
+                        data_frame("Model 3"="Scool Effect",
+                                   RMSE = bs_rmse))
+
+#This calculates adding the n_student effect(bn).
+n_student_bn <- scores_train %>% 
+  left_join(class_bc_add, by = 'classroom') %>%
+  left_join(method_bm, by = 'teaching_method') %>%
+  left_join(school_bs, by = 'school') %>%
+  group_by(n_student) %>%
+  summarise(bn = mean(posttest - mu - bp -bc - bm - bs))
+
+#RMSE results with "n_student" effect
+bn_score <- scores_test %>%
+  left_join(class_bc_add, by = 'classroom') %>%
+  left_join(method_bm, by = 'teaching_method') %>%
+  left_join(school_bs, by = 'school') %>%
+  left_join(n_student_bn, by = 'n_student') %>%
+  mutate(bn_pred = mu + bp + bc + bm + bs + bn) %>%
+  pull(bn_pred)
+bn_rmse <- RMSE(bn_score, scores_test$posttest)
+
+#RMSE results table including adding "n_student" effect
+n_students_rmse <- bind_rows(school_rmse,
+                             data_frame("Model 3"="n_Students in Class Effect",
+                                        RMSE = bn_rmse))
+
+#This calculates the lunch effect(bl) using Least Squares approximation.
+lunch_bl <- scores_train %>% 
+  left_join(class_bc_add, by = 'classroom') %>%
+  left_join(method_bm, by = 'teaching_method') %>%
+  left_join(school_bs, by = 'school') %>%
+  left_join(n_student_bn, by = 'n_student') %>%
+  group_by(lunch) %>%
+  summarise(bl = mean(posttest - mu - bp - bc - bm - bs - bn))
+
+#RMSE results with "lunch" effect
+bl_score <- scores_test %>%
+  left_join(class_bc_add, by = 'classroom') %>%
+  left_join(method_bm, by = 'teaching_method') %>%
+  left_join(school_bs, by = 'school') %>%
+  left_join(n_student_bn, by = 'n_student') %>%
+  left_join(lunch_bl, by = 'lunch') %>%
+  mutate(l_pred = mu + bp + bc + bm + bs + bn + bl) %>%
+  pull(l_pred)
+bl_rmse <- RMSE(bl_score, scores_test$posttest)
+
+#RMSE results table including adding "lunch" effect
+lunch_rmse <- bind_rows(n_students_rmse,
+                          data_frame("Model 3"="Lunch Effect",
+                                     RMSE = bl_rmse))
+
+#This calculates the school_type effect(bt) using Least Squares approximation.
+type_bt <- scores_train %>% 
+  left_join(class_bc_add, by = 'classroom') %>%
+  left_join(method_bm, by = 'teaching_method') %>%
+  left_join(school_bs, by = 'school') %>%
+  left_join(n_student_bn, by = 'n_student') %>%
+  left_join(lunch_bl, by = 'lunch') %>%
+  group_by(school_type) %>%
+  summarise(bt = mean(posttest - mu - bp - bc - bm - bs - bn - bl))
+
+#RMSE results with "teaching_method" effect
+bt_score <- scores_test %>%
+  left_join(class_bc_add, by = 'classroom') %>%
+  left_join(method_bm, by = 'teaching_method') %>%
+  left_join(school_bs, by = 'school') %>%
+  left_join(n_student_bn, by = 'n_student') %>%
+  left_join(lunch_bl, by = 'lunch') %>%
+  left_join(type_bt, by = 'school_type') %>%
+  mutate(bt_pred = mu + bp + bc + bm + bs + bn + bl + bt) %>%
+  pull(bt_pred)
+bt_rmse <- RMSE(bt_score, scores_test$posttest)
+
+#RMSE results table including adding "school type" effect
+type_rmse <- bind_rows(lunch_rmse,
+                         data_frame("Model 3"="School Type Effect",
+                                    RMSE = bt_rmse))
+
+#This calculates the school setting effect(bss) using Least Squares approximation.
+setting_bss <- scores_train %>% 
+  left_join(class_bc_add, by = 'classroom') %>%
+  left_join(method_bm, by = 'teaching_method') %>%
+  left_join(school_bs, by = 'school') %>%
+  left_join(n_student_bn, by = 'n_student') %>%
+  left_join(lunch_bl, by = 'lunch') %>%
+  left_join(type_bt, by = 'school_type') %>%
+  group_by(school_setting) %>%
+  summarise(bss = mean(posttest - mu - bp - bc - bm - bs - bn - bl - bt))
+
+#RMSE results with "school setting" effect
+bss_score <- scores_test %>%
+  left_join(class_bc_add, by = 'classroom') %>%
+  left_join(method_bm, by = 'teaching_method') %>%
+  left_join(school_bs, by = 'school') %>%
+  left_join(n_student_bn, by = 'n_student') %>%
+  left_join(lunch_bl, by = 'lunch') %>%
+  left_join(type_bt, by = 'school_type') %>%
+  left_join(setting_bss, by = 'school_setting') %>%
+  mutate(bss_pred = mu + bp + bc + bm + bs + bn + bl + bt + bss) %>%
+  pull(bss_pred)
+bss_rmse <- RMSE(bss_score, scores_test$posttest)
+
+#RMSE results table including adding "school_setting" effect
+setting_rmse <- bind_rows(type_rmse,
+                       data_frame("Model 3"="School Setting Effect",
+                                  RMSE = bss_rmse))
+
+#This calculates the gender effect(bg).
+gender_bg <- scores_train %>% 
+  left_join(class_bc_add, by = 'classroom') %>%
+  left_join(method_bm, by = 'teaching_method') %>%
+  left_join(school_bs, by = 'school') %>%
+  left_join(n_student_bn, by = 'n_student') %>%
+  left_join(lunch_bl, by = 'lunch') %>%
+  left_join(type_bt, by = 'school_type') %>%
+  left_join(setting_bss, by = 'school_setting') %>%
+  group_by(gender) %>%
+  summarise(bg = mean(posttest - mu - bp - bc - bm - bs - bn - bl - bt - bss))
+
+#RMSE results with gender effect
+bg_score <- scores_test %>%
+  left_join(class_bc_add, by = 'classroom') %>%
+  left_join(method_bm, by = 'teaching_method') %>%
+  left_join(school_bs, by = 'school') %>%
+  left_join(n_student_bn, by = 'n_student') %>%
+  left_join(lunch_bl, by = 'lunch') %>%
+  left_join(type_bt, by = 'school_type') %>%
+  left_join(setting_bss, by = 'school_setting') %>%
+  left_join(gender_bg, by = 'gender') %>%
+  mutate(bg_pred = mu + bp + bc + bm + bs + bn + bl + bt + bss + bg) %>%
+  pull(bg_pred)
+bg_rmse <- RMSE(bg_score, scores_test$posttest)
+
+#RMSE results table including adding gender effect
+gender_rmse <- bind_rows(setting_rmse,
+                       data_frame("Model 3"="Gender Effect",
+                                  RMSE = bg_rmse))
+#Make the table prettier
+gender_table <- gender_rmse %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"),
+                #position = "center",
+                latex_options = "hold_position",
+                full_width = FALSE,
+                font_size = 14)
+
+gender_table
+```
+
+Since the variables school type and school setting raise RMSE scores, they are removed from Model 3. This results in a slightly lower score as shown by the following table.
+
+```{r}
+#This calculates the gender effect(bg) using Least Squares approximation getting rid of others.
+type_bg_end <- scores_train %>% 
+  left_join(class_bc_add, by = 'classroom') %>%
+  left_join(method_bm, by = 'teaching_method') %>%
+  left_join(school_bs, by = 'school') %>%
+  left_join(n_student_bn, by = 'n_student') %>%
+  left_join(lunch_bl, by = 'lunch') %>%
+  group_by(gender) %>%
+  summarise(bg = mean(posttest - mu - bp - bc - bm - bs - bn - bl))
+
+#RMSE results with "gender" effect (losing predictors) gives lower RMSE score
+bg_score_end <- scores_test %>%
+  left_join(class_bc_add, by = 'classroom') %>%
+  left_join(method_bm, by = 'teaching_method') %>%
+  left_join(school_bs, by = 'school') %>%
+  left_join(n_student_bn, by = 'n_student') %>%
+  left_join(lunch_bl, by = 'lunch') %>%
+  left_join(type_bg_end, by = 'gender') %>%
+  mutate(bg_pred = mu + bp + bc + bm + bs + bn + bl + bg) %>%
+  pull(bg_pred)
+model_3_best <- RMSE(bg_score_end, scores_test$posttest)
+
+#RMSE results table including adding "gender" effect (ending)
+gender_rmse_end <- bind_rows(lunch_rmse,
+                             data_frame("Model 3"="Revised Gender Effect",
+                                        RMSE = model_3_best))
+
+#Make the table prettier
+gender_results_end <- gender_rmse_end %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"),
+                #position = "center",
+                latex_options = "hold_position",
+                full_width = FALSE,
+                font_size = 14)%>%
+  row_spec(9, bold = T, color = '#CC6633')
+
+gender_results_end
+```
+\newpage
+# 3. Results
+
+Comparing the three models, the table below shows that Model 1 has the losest RMSE score of `r round(model_1_best,2)` when evaluated using the scores test dataset. 
+
+```{r}
+#limit digits for table simplicity
+options(digits = 3)
+
+#Table for scores_test RMSE results
+scores_test_results_table <- data_frame(Model = c("Model 1", "Model 2", "Model 3"),
+                               "Test Set RMSE" = c(model_1_best, model_2_best,
+                                                   model_3_best))
+#Make the table prettier
+test_results <- scores_test_results_table %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"),
+                position = "center",
+                latex_options = "hold_position",
+                full_width = FALSE,
+                font_size = 14)%>%
+  row_spec(1, bold = T, color = '#CC6633')
+
+test_results
+```
+
+```{r, warning = FALSE,}
+#RMSE results using validation dataset
+y_hat_model_1_val <- predict(train_choice_1, validation)
+model_1_validation <- rmse(validation$posttest, y_hat_model_1_val)
+
+difference <- round(model_1_validation - model_1_best, 2)
+
+```
+
+From here, Model 1 is applied to the final hold-out, the validation dataset. This is the only time the validation set has been used in this project. All prior RMSE scores were obtained using the train and test datasets. Prediction differences between the test set and the validation set are small with a difference of `r difference`.  From this model, test scores should be predicted within `r round(model_1_validation,2)` points. 
+
+```{r}
+#Table for model 1 RMSE results
+model_1_table <- data_frame("Model 1" = c("Test Set", "Final Validation Set"),
+                               "RMSE Score" = c(model_1_best,model_1_validation))
+
+#Make the table prettier
+model_1_results <- model_1_table %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                position = "center",
+                latex_options = "hold_position",
+                full_width = FALSE,
+                font_size = 14)%>%
+  row_spec(2, bold = T, color = '#bb0014')
+
+model_1_results
+```
+ 
+
+###   3.1 Limitations
+
+One challenge with Model 2 was limitations on groups within variables using random forests. The Random Forest program used in calculations limited the number of groups within one variable to 53, while classroom has `r class_numbers`. Since the classroom variable was significant for Model 1, including it in Model 2 was a logical next step. 
+
+A second concern was with collinearity between variables. The degree of correlation between several variables was high, which made it difficult to interpret results. Although, adding all variables to the model resulted in the best overall fit.
+
+###   3.2 Recommendations for Future Study
+
+Future studies may consider including additional predictors to the dataset. Helpful data may be age of student, race/cultural background, family income, number of siblings, location of school, and number of parents in the home. These variables may provide better predictive power than some currently included. 
+
+Additionally, this dataset could be expanded and used in a longitudinal study to predict future events such as GPA's, college entrance exam scores, college application/acceptance numbers, chosen majors, and graduation rates.
